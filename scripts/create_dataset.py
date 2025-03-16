@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 
+data_path = f"../data/raw/big_ideas_dataset"
+
 for i in range(1,17):
     if i<10:
         patient = "00"+str(i)
@@ -10,11 +12,11 @@ for i in range(1,17):
     print("Patient"+str(i))
             
     # Load files
-    bg_df = pd.read_csv("dataset/big_ideas_dataset/"+patient+"/Dexcom_"+patient+".csv")
-    hr_df = pd.read_csv("dataset/big_ideas_dataset/"+patient+"/HR_"+patient+".csv")
-    acc_df = pd.read_csv("dataset/big_ideas_dataset/"+patient+"/ACC_"+patient+".csv")
-    food_df = pd.read_csv("dataset/big_ideas_dataset/"+patient+"/Food_Log_"+patient+".csv")
-    demographic_data = pd.read_csv("dataset/big_ideas_dataset/Demographics.csv")
+    bg_df = pd.read_csv(f"{data_path}/{patient}/Dexcom_{patient}.csv")
+    hr_df = pd.read_csv(f"{data_path}/{patient}/HR_{patient}.csv")
+    acc_df = pd.read_csv(f"{data_path}/{patient}/ACC_{patient}.csv")
+    food_df = pd.read_csv(f"{data_path}/{patient}/Food_Log_{patient}.csv")
+    demographic_data = pd.read_csv(f"{data_path}/Demographics.csv")
 
     # Clean and convert 'Timestamp' columns to datetime format
     bg_df['Timestamp'] = pd.to_datetime(bg_df['Timestamp (YYYY-MM-DDThh:mm:ss)'], errors='coerce')
@@ -108,5 +110,5 @@ for i in range(1,17):
         time_series_df['HbA1c'] = patient_demographics['HbA1c'].values[0]
 
     # Save with index (which contains the timestamps)
-    path = 'dataset/dataset_by_patient/patient_'+patient+'.csv'
+    path = '../data/processed/dataset_by_patient/patient_'+patient+'.csv'
     time_series_df.to_csv(path)
