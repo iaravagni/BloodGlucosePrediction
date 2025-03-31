@@ -1,4 +1,5 @@
 /.venv
-/dataset/big_ideas_dataset
+/.venv_py310
+/data/raw/big_ideas_dataset
 dudas.txt
 models
