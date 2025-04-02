@@ -4,7 +4,7 @@ import xgboost as xgb
 from sklearn.metrics import mean_absolute_error
 
 # Constants for window sizes
-X_WINDOW_SIZE = 90 // 5
+X_WINDOW_SIZE =  6 * 60 // 5
 Y_WINDOW_SIZE = 30 // 5
 
 def format_dataset(df, X_window_size, y_window_size):
@@ -24,7 +24,7 @@ def format_dataset(df, X_window_size, y_window_size):
         
         # X_i = X_i[:-1]
         # y_i = y_i[1:]
-        X_i = X_i[:-y_window_size]  # Remove last few X samples that wouldn't have a full y
+        X_i = X_i[:-y_window_size]
         y_i = y_i[X_window_size:]
         
         X_list.append(X_i)
