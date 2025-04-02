@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import xgboost as xgb
 from sklearn.metrics import mean_absolute_error
+import matplotlib.pyplot as plt
 
 # Constants for window sizes
 X_WINDOW_SIZE = 90 // 5
@@ -56,13 +57,41 @@ def train_model(model, X_train, y_train):
     return model
 
 # Function to evaluate the model
-def evaluate_model(y_true, y_pred, dataset_name="Validation"):
+def evaluate_model(model, y_true, y_pred, dataset_name="Validation"):
     """
     Evaluate model performance on the provided dataset.
     """    
     mae = mean_absolute_error(y_true, y_pred)
     print(f'Mean Absolute Error on {dataset_name} Data: {mae:.4f}')
 
+def avg_result(y):
+
+    print(y.shape)
+
+    return y
+
+
+def plot_results(y_pred, y_true, df):
+    """
+    
+    """
+
+    row_number = 0
+    
+    for patient in df['patient_id'].unique():
+        n_samples = df[df['patient_id'] == patient].shape[0]
+
+        time = np.arange(0, n_samples*5, 5)
+
+        # podria plotear el tramo anterior tambien
+        plt.plot(time, y_pred[row_number:row_number+n_samples], label = 'Prediction')
+        plt.plot(time, y_true[row_number:row_number+n_samples], label = 'Ground truth')
+
+        plt.xlabel("Time (minutes)")
+        plt.ylabel("Blood Glucose Level")
+        plt.title(f'Patient{patient}')
+
+        plt.show()
 
 
 def main():
@@ -92,21 +121,73 @@ def main():
 
     y_val_pred = xgb_model.predict(X_val)
 
-    # Evaluate on the validation set
-    evaluate_model(y_val, y_val_pred, "Validation")
+    print(y_val_pred.shape)
+    print(y_val_pred)
 
-    # Re-train on the combined training and validation dataset
-    X_train_complete = np.concatenate((X_train, X_val), axis=0)
-    y_train_complete = np.concatenate((y_train, y_val), axis=0)
-    xgb_model = train_model(xgb_model, X_train_complete, y_train_complete)
+    # print(y_val.shape)
+    # print(y_val)
 
-    y_test_pred = xgb_model.predict(X_test)
+    # y_val_pred[0] = y_val_pred[0,0]
+    
+    # y_val_pred[1] = y_val_pred[1,0] + y_val_pred[0,1]
 
-    # Evaluate on the test set
-    evaluate_model(y_test, y_test_pred, "Test")
+    # y_val_pred[2] = y_val_pred[2,0] + y_val_pred[1,1] + y_val_pred[0,2]
+
+    y_val_pred_resized = np.zeros([y_val_pred.shape[0],1])
+
+    for i in range(y_val_pred.shape[0]):
+        j = 0
+        k = i
+        while k>=0 and j<6:
+            y_val_pred_resized[i,0] += y_val_pred[k,j]
+
+            if i == 0:
+                print(y_val_pred[k,j])
+            
+            k -= 1
+            j += 1
+            
+
+        y_val_pred_resized[i,0] = y_val_pred_resized[i,0] / (j)
+
+    print(y_val_pred_resized.shape)
+    print(y_val_pred_resized)
+
+    y_val_true = df_validation[['Glucose', 'patient_id']]
+
+    y_val_true = []
+
+    for patient in df_validation['patient_id'].unique():
+
+        total_samples = (df_validation[df_validation['patient_id'] == patient]).shape[0] - X_WINDOW_SIZE
+
+        y_val_true_i = df_validation[['Glucose', 'patient_id']][df_validation['patient_id'] == patient].iloc[-total_samples:, :]
+
+        y_val_true.append(y_val_true_i)
+    
+    y_val_true = np.concatenate(y_val_true, axis=0)[:,0]
+
+    print(y_val_true.shape)
+    print(y_val_true)
+
+    
+
+    
+
+    # # y_pred = avg_result(y_pred)
+
+    # # Evaluate on the validation set
+    # evaluate_model(xgb_model, X_val, y_val, "Validation")
+
+    # # Re-train on the combined training and validation dataset
+    # X_train_complete = np.concatenate((X_train, X_val), axis=0)
+    # y_train_complete = np.concatenate((y_train, y_val), axis=0)
+    # xgb_model = train_model(xgb_model, X_train_complete, y_train_complete)
+
+    # # Evaluate on the test set
+    # evaluate_model(xgb_model, X_test, y_test, "Test")
 
     # #guardar los resultados del test set
-    pd.DataFrame(y_test_pred).to_csv(r'data\outputs\test_dataset_predictions.csv')
 
 # Main entry point
 if __name__ == '__main__':
