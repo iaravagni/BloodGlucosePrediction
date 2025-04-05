@@ -9,24 +9,34 @@ import math
 X_WINDOW_SIZE =  6  * 60 // 5
 Y_WINDOW_SIZE = 0.5 * 60 // 5
 
-# Initialize the TimesFM model with PyTorch backend for CPU
-tfm = timesfm.TimesFm(
-    hparams=timesfm.TimesFmHparams(
-        backend="cpu",
-        per_core_batch_size=1,  # Lower for CPU
-        horizon_len=Y_WINDOW_SIZE,  
-        num_layers=50,
-        use_positional_embedding=False,
-        context_len=X_WINDOW_SIZE,
-    ),
-    checkpoint=timesfm.TimesFmCheckpoint(
-        huggingface_repo_id="google/timesfm-2.0-500m-pytorch"),
-)
 
-# Data directory containing the patient files
-data_dir = "../data/processed/dataset_by_patient"  # Update this path
-file_list = [f for f in os.listdir(data_dir) if f.endswith('.csv')]
+def load_model():
+    # Initialize the TimesFM model with PyTorch backend for CPU
+    tfm = timesfm.TimesFm(
+        hparams=timesfm.TimesFmHparams(
+            backend="cpu",
+            per_core_batch_size=1,  # Lower for CPU
+            horizon_len=Y_WINDOW_SIZE,  
+            num_layers=50,
+            use_positional_embedding=False,
+            context_len=X_WINDOW_SIZE,
+        ),
+        checkpoint=timesfm.TimesFmCheckpoint(
+            huggingface_repo_id="google/timesfm-2.0-500m-pytorch"),
+    )
 
+    return tfm
+
+
+def main():
+    print("Running machine_learning_approach script...")
+
+    # Load datasets
+    df_train = pd.read_csv('data/processed/train_dataset.csv')
+    df_validation = pd.read_csv('data/processed/validation_dataset.csv')
+    df_test = pd.read_csv('data/processed/test_dataset.csv')
+
+    tfm = load_model()
 # Metrics storage
 all_metrics = []
 
