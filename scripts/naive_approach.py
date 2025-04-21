@@ -1,303 +1,340 @@
 import os
-import time
-import json
-import numpy as np
+import tempfile
 import pandas as pd
-import matplotlib.pyplot as plt
-import timesfm
-from collections import defaultdict
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import warnings
+import torch
+import numpy as np
+from transformers import Trainer, TrainingArguments, set_seed
 
-# Constants for window sizes
-X_WINDOW_SIZE = int(6 * 60 // 5)  # 6 hours in 5-minute intervals
-Y_WINDOW_SIZE = int(0.5 * 60 // 5)  # 30 minutes in 5-minute intervals
+from tsfm_public import TimeSeriesPreprocessor
+from tsfm_public.models.tinytimemixer import TinyTimeMixerForPrediction
+from tsfm_public.toolkit.get_model import get_model
+from tsfm_public.toolkit.dataset import ForecastDFDataset
 
-def get_batched_data_fn(
-    df,
-    batch_size=128, 
-    context_len=X_WINDOW_SIZE, 
-    horizon_len=Y_WINDOW_SIZE,
-):
+# Constants
+SEED = 42
+TTM_MODEL_PATH = "ibm-granite/granite-timeseries-ttm-r2"
+CONTEXT_LENGTH = 52  # 4.33 hrs
+PREDICTION_LENGTH = 6  # 30 mins
+OUT_DIR = "ttm_finetuned_models/"
+
+def setup_environment():
     """
-    Create batched data from the dataframe for model training/inference.
+    Set up the environment for model training and evaluation.
+    Creates necessary directories and sets random seed for reproducibility.
+    """
+    set_seed(SEED)
+    os.makedirs(OUT_DIR, exist_ok=True)
+    os.makedirs(os.path.join(OUT_DIR, 'results'), exist_ok=True)
+    
+def load_dataset(file_path):
+    """
+    Load the dataset from the specified file path.
     
     Args:
-        df: DataFrame containing patient data
-        batch_size: Number of examples per batch
-        context_len: Length of input context window
-        horizon_len: Length of prediction horizon
+        file_path (str): Path to the dataset CSV file
         
     Returns:
-        Function that yields batches of data
+        pd.DataFrame: The loaded dataset
     """
-    examples = defaultdict(list)
-    num_examples = 0
-    
-    for patient in df['patient_id'].unique():
-        sub_df = df[df["patient_id"] == patient] 
-        for start in range(0, len(sub_df) - (int(context_len) + int(horizon_len)), int(horizon_len)):
-            num_examples += 1
-            context_end = start + context_len
-            
-            examples["patient_id"].append(patient)
-            examples["gender"].append(sub_df.iloc[0]["Gender"])
-            examples["HbA1c"].append(sub_df.iloc[0]['HbA1c'])
-            examples["inputs"].append(sub_df["Glucose"][start:context_end].tolist())
-            examples["accelerometer"].append(sub_df["Accelerometer"][start:context_end + horizon_len].tolist())
-            examples["calories"].append(sub_df["Calories"][start:context_end + horizon_len].tolist())
-            examples["sugar"].append(sub_df["Sugar"][start:context_end + horizon_len].tolist())
-            examples["carbs"].append(sub_df["Carbs"][start:context_end + horizon_len].tolist())
-            examples["timestamp"].append(sub_df["Timestamp"][start:context_end + horizon_len].tolist())
-            examples["outputs"].append(sub_df["Glucose"][context_end:(context_end + horizon_len)].tolist())
-  
-    def data_fn():
-        for i in range(1 + (num_examples - 1) // batch_size):
-            yield {k: v[(i * batch_size):((i + 1) * batch_size)] for k, v in examples.items()}
-  
-    return data_fn
+    return pd.read_csv(file_path)
 
-def save_input_data(input_data, filename="input_data.json"):
+def prepare_data(data, timestamp_column):
     """
-    Save the batched input data to a JSON file.
+    Prepare the dataset by converting timestamp column to datetime format.
     
     Args:
-        input_data: Function that yields batches of data
-        filename: Path to save the JSON file
-    """
-    batched_data = list(input_data())  # Convert generator to list
-    
-    # Convert NumPy types to Python native types
-    def convert_types(obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return obj
-
-    # Apply conversion to every element
-    batched_data = json.loads(json.dumps(batched_data, default=convert_types))
-
-    with open(filename, "w") as f:
-        json.dump(batched_data, f, indent=4)
-
-    print(f"Input data saved to {filename}")
-
-def load_model():
-    """
-    Load the TimesFM model for forecasting.
-    
-    Returns:
-        TimesFM model instance
-    """
-    tfm = timesfm.TimesFm(
-        hparams=timesfm.TimesFmHparams(
-            backend="cpu",
-            per_core_batch_size=32,
-            horizon_len=128,
-            context_len=512,
-        ),
-        checkpoint=timesfm.TimesFmCheckpoint(
-            huggingface_repo_id="google/timesfm-1.0-200m-pytorch"),
-    )
-    return tfm
-
-def run_inference(model, input_data):
-    """
-    Run inference on the given input data using the TimesFM model.
-    
-    Args:
-        model: TimesFM model instance
-        input_data: Function that yields batches of data
+        data (pd.DataFrame): The dataset
+        timestamp_column (str): Name of the timestamp column
         
     Returns:
-        Tuple of (all_forecasts, metrics)
+        pd.DataFrame: The processed dataset
     """
-    # Initialize metrics dictionary for tracking performance
-    metrics = defaultdict(list)
+    data[timestamp_column] = pd.to_datetime(data[timestamp_column])
+    return data
+
+def get_column_specs():
+    """
+    Define and return column specifications for the dataset.
     
-    # Initialize dictionary to store all forecasts
-    all_forecasts = {
-        "patient_id": [],
-        "timestamp": [],
-        "raw_forecast": [],
-        "cov_forecast": [],
-        "ols_forecast": [],
-        "ground_truth": []
+    Returns:
+        dict: Column specifications including timestamp, ID, target, and control columns
+    """
+    timestamp_column = "Timestamp"
+    id_columns = ["patient_id"]
+    target_columns = ["Glucose"]
+    control_columns = ["Accelerometer", "Calories", "Carbs", "Sugar", "Gender", "HbA1c", "Age"]
+    
+    return {
+        "timestamp_column": timestamp_column,
+        "id_columns": id_columns,
+        "target_columns": target_columns,
+        "control_columns": control_columns,
+    }
+
+def create_test_only_dataset(ts_preprocessor, test_dataset, train_dataset=None, stride=1, enable_padding=True, **dataset_kwargs):
+    """
+    Creates a preprocessed pytorch dataset for testing only.
+    
+    Args:
+        ts_preprocessor: TimeSeriesPreprocessor instance
+        test_dataset: Pandas dataframe for testing
+        train_dataset: Optional pandas dataframe for training the scaler
+        stride: Stride used for creating the dataset
+        enable_padding: If True, datasets are created with padding
+        dataset_kwargs: Additional keyword arguments to pass to ForecastDFDataset
+    
+    Returns:
+        ForecastDFDataset for testing
+    """
+    # Standardize the test dataframe
+    test_data = ts_preprocessor._standardize_dataframe(test_dataset)
+    
+    # Train the preprocessor on the training data if provided, otherwise use test data
+    if train_dataset is not None:
+        train_data = ts_preprocessor._standardize_dataframe(train_dataset)
+        ts_preprocessor.train(train_data)
+    else:
+        ts_preprocessor.train(test_data)
+    
+    # Preprocess the test data
+    test_data_prep = test_data.copy()  # Skip preprocessing to avoid scaling errors
+    
+    # Specify columns
+    column_specifiers = {
+        "id_columns": ts_preprocessor.id_columns,
+        "timestamp_column": ts_preprocessor.timestamp_column,
+        "target_columns": ts_preprocessor.target_columns,
+        "observable_columns": ts_preprocessor.observable_columns,
+        "control_columns": ts_preprocessor.control_columns,
+        "conditional_columns": ts_preprocessor.conditional_columns,
+        "categorical_columns": ts_preprocessor.categorical_columns,
+        "static_categorical_columns": ts_preprocessor.static_categorical_columns,
     }
     
-    # Process each batch
-    for i, example in enumerate(input_data()):
-        start_time = time.time()
-        
-        # Generate forecast without covariates
-        raw_forecast, _ = model.forecast(
-            inputs=example["inputs"], freq=[0] * len(example["inputs"])
-        )
-        
-        # Generate forecast with covariates
-        cov_forecast, ols_forecast = model.forecast_with_covariates(  
-            inputs=example["inputs"],
-            dynamic_numerical_covariates={
-                "accelerometer": example["accelerometer"],
-                "calories": example["calories"],
-                "sugar": example["sugar"],
-                "carbs": example["carbs"],
-            },
-            dynamic_categorical_covariates={},
-            static_numerical_covariates={},
-            static_categorical_covariates={
-                "gender": example["gender"],
-                "HbA1c": example["HbA1c"],
-            },
-            freq=[0] * len(example["inputs"]),
-            xreg_mode="xreg + timesfm",  # default
-            ridge=0.0,
-            force_on_cpu=False,
-            normalize_xreg_target_per_input=True,  # default
-        )
-        
-        elapsed_time = time.time() - start_time
-        print(f"\rBatch {i+1}: processed in {elapsed_time:.2f} seconds", end="")
-        
-        # Store all forecasts for CSV output
-        for j in range(len(example["outputs"])):
-            all_forecasts["patient_id"].append(example["patient_id"][j])
-            all_forecasts["timestamp"].append(example["timestamp"][j][-Y_WINDOW_SIZE:])
-            all_forecasts["raw_forecast"].append(raw_forecast[j, :Y_WINDOW_SIZE].tolist())
-            all_forecasts["cov_forecast"].append(cov_forecast[j].tolist())
-            all_forecasts["ols_forecast"].append(ols_forecast[j].tolist())
-            all_forecasts["ground_truth"].append(example["outputs"][j])
-
-        # Calculate metrics for monitoring
-        metrics["eval_mae_timesfm"].extend(
-            mae(raw_forecast[:, :Y_WINDOW_SIZE], example["outputs"])
-        )
-        metrics["eval_mae_xreg_timesfm"].extend(
-            mae(cov_forecast, example["outputs"])
-        )
-        metrics["eval_mae_xreg"].extend(
-            mae(ols_forecast, example["outputs"])
-        )
-        metrics["eval_mse_timesfm"].extend(
-            mse(raw_forecast[:, :Y_WINDOW_SIZE], example["outputs"])
-        )
-        metrics["eval_mse_xreg_timesfm"].extend(
-            mse(cov_forecast, example["outputs"])
-        )
-        metrics["eval_mse_xreg"].extend(
-            mse(ols_forecast, example["outputs"])
-        )
+    params = column_specifiers
+    params["context_length"] = ts_preprocessor.context_length
+    params["prediction_length"] = ts_preprocessor.prediction_length
+    params["stride"] = stride
+    params["enable_padding"] = enable_padding
     
-    print("\nInference complete!")
-    return all_forecasts, metrics
+    # Add frequency token - this is critical for TinyTimeMixer
+    params["frequency_token"] = ts_preprocessor.get_frequency_token(ts_preprocessor.freq)
+    
+    # Update with any additional kwargs
+    params.update(**dataset_kwargs)
+    
+    # Create the ForecastDFDataset
+    test_dataset = ForecastDFDataset(test_data_prep, **params)
+    
+    if len(test_dataset) == 0:
+        raise RuntimeError("The generated test dataset is of zero length.")
+    
+    return test_dataset
 
-def mse(y_pred, y_true):
+    
+
+def zeroshot_eval(train_df, test_df, batch_size, context_length=CONTEXT_LENGTH, forecast_length=PREDICTION_LENGTH):
     """
-    Calculate Mean Squared Error.
+    Performs zero-shot evaluation of time series forecasting on test data.
     
     Args:
-        y_pred: Predicted values
-        y_true: True values
+        train_df: Training dataframe
+        test_df: Testing dataframe
+        batch_size: Batch size for evaluation
+        context_length: Number of time steps to use as context
+        forecast_length: Number of time steps to predict
         
     Returns:
-        MSE values per sample
+        dict: Dictionary containing predictions dataframe and metrics
     """
-    y_pred = np.array(y_pred)
-    y_true = np.array(y_true)
-    return np.mean(np.square(y_pred - y_true), axis=1, keepdims=True)
+    column_specifiers = get_column_specs()
+    
+    # Create preprocessor with scaling disabled
+    tsp = TimeSeriesPreprocessor(
+        timestamp_column=column_specifiers["timestamp_column"],
+        id_columns=column_specifiers["id_columns"],
+        target_columns=column_specifiers["target_columns"],
+        control_columns=column_specifiers["control_columns"],
+        context_length=context_length,
+        prediction_length=forecast_length,
+        scaling=False,
+        encode_categorical=False,
+        force_return="zeropad",
+    )
+    
+    # Load model
+    zeroshot_model = get_model(
+        TTM_MODEL_PATH,
+        context_length=context_length,
+        prediction_length=forecast_length,
+        freq_prefix_tuning=False,
+        freq=None,
+        prefer_l1_loss=False,
+        prefer_longer_context=True,
+    )
+    
+    # Create test dataset
+    dset_test = create_test_only_dataset(ts_preprocessor=tsp, test_dataset=test_df, train_dataset=train_df)
+    
+    # Setup trainer
+    temp_dir = tempfile.mkdtemp()
+    zeroshot_trainer = Trainer(
+        model=zeroshot_model,
+        args=TrainingArguments(
+            output_dir=temp_dir,
+            per_device_eval_batch_size=batch_size,
+            seed=SEED,
+            report_to="none",
+        ),
+    )
+    
+    # Get predictions
+    predictions_dict = zeroshot_trainer.predict(dset_test)
+    
+    # Process predictions
+    processed_predictions = process_predictions(predictions_dict, tsp, column_specifiers["target_columns"])
+    
+    # Get evaluation metrics
+    metrics = zeroshot_trainer.evaluate(dset_test)
+    
+    return {
+        "predictions_df": processed_predictions,
+        "metrics": metrics
+    }
 
-def mae(y_pred, y_true):
+def process_predictions(predictions_dict, tsp, target_columns):
     """
-    Calculate Mean Absolute Error.
+    Process the predictions from the Trainer into a usable DataFrame.
     
     Args:
-        y_pred: Predicted values
-        y_true: True values
+        predictions_dict: Predictions from the Trainer
+        tsp: TimeSeriesPreprocessor instance
+        target_columns: List of target column names
         
     Returns:
-        MAE values per sample
+        pd.DataFrame: DataFrame containing processed predictions
     """
-    y_pred = np.array(y_pred)
-    y_true = np.array(y_true)
-    return np.mean(np.abs(y_pred - y_true), axis=1, keepdims=True)
+    # Extract predictions
+    if hasattr(predictions_dict, 'predictions'):
+        raw_predictions = predictions_dict.predictions
+    else:
+        raw_predictions = predictions_dict.get('predictions', predictions_dict)
+    
+    # Handle tuple predictions (mean and uncertainty)
+    if isinstance(raw_predictions, tuple):
+        predictions = raw_predictions[0]
+    else:
+        predictions = raw_predictions
+    
+    # Get shape information
+    n_samples, n_timesteps, n_features = predictions.shape
+    
+    # Create DataFrame for processed predictions
+    processed_df = pd.DataFrame()
+    
+    # Extract predictions for each target and timestep
+    for i, col in enumerate(target_columns):
+        if i < n_features:
+            for t in range(n_timesteps):
+                processed_df[f"{col}_step_{t+1}"] = predictions[:, t, i]
+    
+    return processed_df
 
-def save_forecasts_to_csv(forecasts_data, output_file="forecasts.csv"):
+def simple_diagonal_averaging(predictions_df, test_data, context_length, step_columns):
     """
-    Save model forecasts to a CSV file.
+    Simple approach to diagonally averaging predictions by patient.
+    Skips the first context_length rows and averages the rest for each timestamp.
     
     Args:
-        forecasts_data: Dictionary containing forecast data
-        output_file: Path to save the CSV file
+        predictions_df (pd.DataFrame): DataFrame with step-wise predictions
+        test_data (pd.DataFrame): Original test data with patient IDs
+        context_length (int): Number of context steps used in the model
+        step_columns (list): List of step column names
+    
+    Returns:
+        pd.DataFrame: DataFrame with averaged predictions
     """
-    # Create output directory if it doesn't exist
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    # Create a new dataframe for the final results
+    final_df = test_data.copy()
     
-    # Create a list to store all forecast rows
-    forecast_rows = []
+    # Initialize prediction column with zeros/NaN
+    final_df['averaged_prediction'] = 0
     
-    # Process each example
-    for i in range(len(forecasts_data["patient_id"])):
-        patient_id = forecasts_data["patient_id"][i]
-        timestamps = forecasts_data["timestamp"][i]
+    # Process each patient separately
+    for patient_id in test_data['patient_id'].unique():
+        # Get indices for this patient
+        patient_mask = final_df['patient_id'] == patient_id
+        patient_indices = final_df[patient_mask].index
         
-        # Get forecasts for this example
-        raw_forecast = forecasts_data["raw_forecast"][i]
-        cov_forecast = forecasts_data["cov_forecast"][i]
-        ols_forecast = forecasts_data["ols_forecast"][i]
-        ground_truth = forecasts_data["ground_truth"][i]
+        # Skip the first context_length rows for this patient
+        start_idx = min(context_length, len(patient_indices))
         
-        # Create rows for each timestamp in the forecast horizon
-        for j in range(len(ground_truth)):
-            forecast_rows.append({
-                "patient_id": patient_id,
-                "timestamp": timestamps[j],
-                "raw_forecast": raw_forecast[j],
-                "cov_forecast": cov_forecast[j],
-                "ols_forecast": ols_forecast[j],
-                "ground_truth": ground_truth[j]
-            })
+        # For each row after the context window
+        for i in range(start_idx, len(patient_indices)):
+            row_idx = patient_indices[i]
+            pred_row_idx = i - context_length
+            
+            # Skip if the prediction row index is negative
+            if pred_row_idx < 0:
+                continue
+                
+            # Get the corresponding prediction row
+            if pred_row_idx < len(predictions_df):
+                # Average the predictions for all steps
+                avg_prediction = predictions_df.iloc[pred_row_idx][step_columns].mean()
+                final_df.loc[row_idx, 'averaged_prediction'] = avg_prediction
     
-    # Convert to DataFrame and save as CSV
-    forecasts_df = pd.DataFrame(forecast_rows)
-    forecasts_df.to_csv(output_file, index=False)
-    
-    print(f"Forecasts saved to {output_file}")
+    return final_df
 
 def main():
-    """Main function to run the glucose forecasting pipeline."""
-    print("Running glucose forecasting pipeline...")
-
-    # Load test dataset
-    test_file = "data/processed/test_dataset.csv"
-    print(f"Loading test data from {test_file}")
-    df_test = pd.read_csv(test_file)
-
-    # Get batched data function
-    batch_size = 128
-    print(f"Creating batched data with batch size {batch_size}")
-    input_data = get_batched_data_fn(df_test, batch_size=batch_size)
-
-    # Load the model
-    print("Loading TimesFM model...")
-    model = load_model()
-
-    # Run inference
-    print("Running inference...")
-    all_forecasts, metrics = run_inference(model, input_data)
-
-    # Save forecasts to CSV
-    print("Saving forecasts to CSV...")
-    save_forecasts_to_csv(all_forecasts, output_file="results/glucose_forecasting/forecasts.csv")
+    """
+    Main function to execute the time series forecasting workflow.
+    """
+    # Setup
+    # setup_environment()
     
-    # Print results
-    avg_metrics = {key: np.mean(value) for key, value in metrics.items()}
-    print("\nAverage Metrics: ")
-    for metric, value in avg_metrics.items():
-        print(f"{metric}: {value:.4f}")
+    # Get dataset path
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    test_file = os.path.join(script_dir, '..', 'data', 'processed', 'test_dataset.csv')
+    train_file = os.path.join(script_dir, '..', 'data', 'processed', 'train_dataset.csv')
     
-    print("\nDone!")
+    # Load and prepare data
+    test_data = load_dataset(test_file)
+    train_data = load_dataset(train_file)
+    column_specs = get_column_specs()
+    test_data = prepare_data(test_data, column_specs["timestamp_column"])
+    train_data = prepare_data(train_data, column_specs["timestamp_column"])
+    
+    # Run zero-shot evaluation
+    results = zeroshot_eval(
+        train_df=train_data,
+        test_df=test_data,
+        batch_size=8,
+        context_length=CONTEXT_LENGTH,
+        forecast_length=PREDICTION_LENGTH
+    )
+
+    # Get all step columns
+    step_columns = [col for col in results["predictions_df"].columns if col.startswith("Glucose_step_")]
+    
+    # Apply simple diagonal averaging by patient
+    final_results = simple_diagonal_averaging(
+        results["predictions_df"], 
+        test_data, 
+        CONTEXT_LENGTH,
+        step_columns
+    )
+    
+    # Save raw predictions to CSV
+    raw_predictions_path = os.path.join(script_dir, '..', 'data', 'outputs', 'naive_predictions_raw.csv')
+    results["predictions_df"].to_csv(raw_predictions_path, index=False)
+    
+    # Save final results to CSV
+    final_results_path = os.path.join(script_dir, '..', 'data', 'outputs', 'naive_predictions.csv')
+    final_results.to_csv(final_results_path, index=False)
+    
+    return
 
 if __name__ == "__main__":
     main()
