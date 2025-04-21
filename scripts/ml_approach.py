@@ -128,9 +128,9 @@ def main():
 
     # Initialize the model
     xgb_model = xgb.XGBRegressor(
-        n_estimators=100, 
-        learning_rate=0.1, 
-        max_depth=6, 
+        n_estimators=50, 
+        learning_rate=0.2, 
+        max_depth=5, 
         objective='reg:squarederror', 
         random_state=42
     )
@@ -138,7 +138,7 @@ def main():
     # Train model on the training dataset
     xgb_model = train_model(xgb_model, X_train, y_train)
 
-    model_output_path = os.path.join(script_dir, '..', 'data', 'outputs', 'xgb_model.pkl')
+    model_output_path = os.path.join(script_dir, '..', 'models', 'xgb_model.pkl')
     joblib.dump(xgb_model, model_output_path)
 
     xgb_model = joblib.load(model_output_path)
@@ -162,9 +162,6 @@ def main():
 
     # Save test set results
     pd.DataFrame(y_test_pred).to_csv(output_dir)
-
-    step_columns = [f"step_{i}" for i in range(y_test_pred.shape[1])]
-
 
     final_results = simple_diagonal_averaging(
         pd.DataFrame(y_test_pred), 
