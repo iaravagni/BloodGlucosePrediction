@@ -80,7 +80,7 @@ The interactive app allows users to:
   - Machine Learning model
   - Deep Learning model
 
-> 📍 A working version is deployed and publicly accessible [**here**](#) *(add your link)*
+> 📍 A working version is deployed and publicly accessible [**here**](https://huggingface.co/spaces/iaravagni/BloodGlucosePrediction)
 
 ---
 
