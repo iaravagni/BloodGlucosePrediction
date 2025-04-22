@@ -13,7 +13,7 @@ from tsfm_public.toolkit.dataset import ForecastDFDataset
 
 # Constants
 SEED = 42
-TTM_MODEL_PATH = "iaravagni/ttm-finetune-model"
+TTM_MODEL_PATH = "iaravagni/ttm-finetuned-model"
 CONTEXT_LENGTH = 52  # 4.33 hrs
 PREDICTION_LENGTH = 6  # 30 mins
 OUT_DIR = "ttm_finetuned_models/"
@@ -134,7 +134,7 @@ def create_test_only_dataset(ts_preprocessor, test_dataset, train_dataset=None, 
 
     
 
-def zeroshot_eval(train_df, test_df, batch_size, context_length=CONTEXT_LENGTH, forecast_length=PREDICTION_LENGTH):
+def zeroshot_eval(train_df, test_df, batch_size, context_length=CONTEXT_LENGTH, forecast_length=PREDICTION_LENGTH, model_path=TTM_MODEL_PATH):
     """
     Performs zero-shot evaluation of time series forecasting on test data.
     
@@ -165,7 +165,7 @@ def zeroshot_eval(train_df, test_df, batch_size, context_length=CONTEXT_LENGTH, 
     
     # Load model
     zeroshot_model = get_model(
-        TTM_MODEL_PATH,
+        model_path,
         context_length=context_length,
         prediction_length=forecast_length,
         freq_prefix_tuning=False,
@@ -243,8 +243,9 @@ def process_predictions(predictions_dict, tsp, target_columns):
 
 def simple_diagonal_averaging(predictions_df, test_data, context_length, step_columns):
     """
-    Simple approach to diagonally averaging predictions by patient.
-    Skips the first context_length rows and averages the rest for each timestamp.
+    Improved approach to diagonally averaging predictions by patient.
+    Properly handles the last rows of predictions to ensure all available 
+    predicted values are used.
     
     Args:
         predictions_df (pd.DataFrame): DataFrame with step-wise predictions
@@ -284,8 +285,21 @@ def simple_diagonal_averaging(predictions_df, test_data, context_length, step_co
                 # Average the predictions for all steps
                 avg_prediction = predictions_df.iloc[pred_row_idx][step_columns].mean()
                 final_df.loc[row_idx, 'averaged_prediction'] = avg_prediction
+            else:
+                # Handle the case where we've run out of prediction rows
+                # Calculate how many steps beyond the last prediction row we are
+                excess_steps = pred_row_idx - len(predictions_df) + 1
+                
+                # Make sure we don't go beyond the available steps
+                if excess_steps < len(step_columns):
+                    # Use the last row of predictions but only the appropriate steps
+                    relevant_steps = step_columns[excess_steps:]
+                    if relevant_steps:
+                        avg_prediction = predictions_df.iloc[-1][relevant_steps].mean()
+                        final_df.loc[row_idx, 'averaged_prediction'] = avg_prediction
     
     return final_df
+
 
 def main():
     """

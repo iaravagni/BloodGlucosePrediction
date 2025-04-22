@@ -196,7 +196,7 @@ def upload_to_hf(model):
     model.save_pretrained("model/finetuned_ttm_model")
 
     username = 'iaravagni'
-    repo_name = "ttm-finetune-model"  # customize this
+    repo_name = "ttm-finetuned-model"  # customize this
 
     upload_folder(
         repo_id=f"{username}/{repo_name}",
@@ -223,9 +223,9 @@ def main():
     train_data = pd.read_csv("/content/train_dataset.csv")
 
 
-    learning_rate = 0.001
-    num_epochs = 40
-    batch_size = 32
+    learning_rate = 0.002
+    num_epochs = 13
+    batch_size = 64
 
     OUT_DIR = "model"
 

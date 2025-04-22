@@ -138,11 +138,6 @@ def main():
     # Train model on the training dataset
     xgb_model = train_model(xgb_model, X_train, y_train)
 
-    model_output_path = os.path.join(script_dir, '..', 'models', 'xgb_model.pkl')
-    joblib.dump(xgb_model, model_output_path)
-
-    xgb_model = joblib.load(model_output_path)
-
     y_val_pred = xgb_model.predict(X_val)
 
     # Evaluate on the validation set
@@ -153,6 +148,11 @@ def main():
     y_train_complete = np.concatenate((y_train, y_val), axis=0)
     xgb_model = train_model(xgb_model, X_train_complete, y_train_complete)
 
+    model_output_path = os.path.join(script_dir, '..', 'models', 'xgb_model.pkl')
+    joblib.dump(xgb_model, model_output_path)
+
+    xgb_model = joblib.load(model_output_path)
+    
     y_test_pred = xgb_model.predict(X_test)
 
     # Evaluate on the test set
