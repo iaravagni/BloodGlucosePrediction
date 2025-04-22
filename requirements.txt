@@ -1,0 +1,11 @@
+streamlit
+ipython==8.35.0
+pandas
+numpy
+matplotlib
+joblib
+granite-tsfm @ git+https://github.com/ibm-granite/granite-tsfm.git@216850d0cb073e31689049c1334f701fe11bc2c3
+scikit-learn
+transformers
+torch
+xgboost

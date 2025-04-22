@@ -6,9 +6,9 @@ import os
 import joblib
 from sklearn.metrics import root_mean_squared_error
 
-from make_dataset import create_features
-from naive_approach import get_column_specs, prepare_data, zeroshot_eval, simple_diagonal_averaging
-from ml_approach import format_dataset
+from scripts.make_dataset import create_features
+from scripts.naive_approach import get_column_specs, prepare_data, zeroshot_eval, simple_diagonal_averaging
+from scripts.ml_approach import format_dataset
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONTEXT_LENGTH = 52

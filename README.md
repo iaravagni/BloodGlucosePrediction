@@ -86,10 +86,8 @@ The interactive app allows users to:
 
 ## 📽️ Final Deliverables
 
-- 🔗 [10-minute video presentation](#) *(add YouTube or Panopto link)*
-- 🔗 [Demo day pitch (3-min)](#)
-- 🔗 [GitHub repository](#)
-- 🔗 [Live Streamlit app](#)
+- 🔗 [10-minute video presentation](#) 
+- 🔗 [Live Streamlit app](https://huggingface.co/spaces/iaravagni/BloodGlucosePrediction)
 
 ---
 
