@@ -196,7 +196,7 @@ def upload_to_hf(model):
     model.save_pretrained("model/finetuned_ttm_model")
 
     username = 'iaravagni'
-    repo_name = "ttm-finetune-model"  # customize this
+    repo_name = "ttm-finetuned-model"  # customize this
 
     upload_folder(
         repo_id=f"{username}/{repo_name}",

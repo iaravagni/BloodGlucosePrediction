@@ -243,8 +243,9 @@ def process_predictions(predictions_dict, tsp, target_columns):
 
 def simple_diagonal_averaging(predictions_df, test_data, context_length, step_columns):
     """
-    Simple approach to diagonally averaging predictions by patient.
-    Skips the first context_length rows and averages the rest for each timestamp.
+    Improved approach to diagonally averaging predictions by patient.
+    Properly handles the last rows of predictions to ensure all available 
+    predicted values are used.
     
     Args:
         predictions_df (pd.DataFrame): DataFrame with step-wise predictions
@@ -284,8 +285,21 @@ def simple_diagonal_averaging(predictions_df, test_data, context_length, step_co
                 # Average the predictions for all steps
                 avg_prediction = predictions_df.iloc[pred_row_idx][step_columns].mean()
                 final_df.loc[row_idx, 'averaged_prediction'] = avg_prediction
+            else:
+                # Handle the case where we've run out of prediction rows
+                # Calculate how many steps beyond the last prediction row we are
+                excess_steps = pred_row_idx - len(predictions_df) + 1
+                
+                # Make sure we don't go beyond the available steps
+                if excess_steps < len(step_columns):
+                    # Use the last row of predictions but only the appropriate steps
+                    relevant_steps = step_columns[excess_steps:]
+                    if relevant_steps:
+                        avg_prediction = predictions_df.iloc[-1][relevant_steps].mean()
+                        final_df.loc[row_idx, 'averaged_prediction'] = avg_prediction
     
     return final_df
+
 
 def main():
     """

@@ -1,14 +1,38 @@
 import pandas as pd
 import numpy as np
 import json
+import os
 
+# Get the directory where the script is located
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def clean_blood_glucose_df(bg_df):
+    """
+    Filter a blood glucose dataframe to keep only rows where Event Type is 'EGV' (Estimated Glucose Value).
+    
+    Args:
+        bg_df (pd.DataFrame): DataFrame containing blood glucose data
+        
+    Returns:
+        pd.DataFrame: Filtered DataFrame with only EGV events
+    """
     # Filter the rows where Event Type is 'EGV'
     bg_df = bg_df[bg_df['Event Type'] == 'EGV']
     return bg_df
 
 def get_accelerometer_values(acc_df, time_series_df, window_size='1h'):
+    """
+    Calculate accelerometer magnitude values and add them to the time series dataframe.
+    Uses a weighted average where more recent values have higher weight.
+    
+    Args:
+        acc_df (pd.DataFrame): DataFrame containing accelerometer data
+        time_series_df (pd.DataFrame): DataFrame to add accelerometer values to
+        window_size (str, optional): Time window to consider for calculations. Defaults to '1h'.
+        
+    Returns:
+        pd.DataFrame: Original DataFrame with added accelerometer magnitude values
+    """
     # Calculate magnitude for accelerometer data
     acc_df['Magnitude'] = np.sqrt(acc_df[' acc_x']**2 + acc_df[' acc_y']**2 + acc_df[' acc_z']**2).round(2)
     acc_df['Magnitude'] = pd.to_numeric(acc_df['Magnitude'], errors='coerce')
@@ -36,6 +60,17 @@ def get_accelerometer_values(acc_df, time_series_df, window_size='1h'):
     return time_series_df
 
 def get_food_values(food_df, time_series_df, window_size='1h'):
+    """
+    Calculate food metrics (calories, carbs, sugar) for each timestamp in the time series dataframe.
+    
+    Args:
+        food_df (pd.DataFrame): DataFrame containing food log data
+        time_series_df (pd.DataFrame): DataFrame to add food metrics to
+        window_size (str, optional): Time window to consider for calculations. Defaults to '1h'.
+        
+    Returns:
+        pd.DataFrame: Original DataFrame with added food metrics columns
+    """
     # Initialize arrays for food metrics
     calories = []
     carbs = []
@@ -66,7 +101,17 @@ def get_food_values(food_df, time_series_df, window_size='1h'):
     return time_series_df
 
 def calculate_age(born, as_of_date=pd.Timestamp('2019-01-01')):
+    """
+    Calculate age based on date of birth.
     
+    Args:
+        born (str or timestamp): Date of birth
+        as_of_date (pd.Timestamp, optional): Reference date for age calculation. 
+                                             Defaults to January 1, 2019.
+        
+    Returns:
+        int: Age in years
+    """
     born = pd.Timestamp(born)
 
     # Calculate age
@@ -75,6 +120,16 @@ def calculate_age(born, as_of_date=pd.Timestamp('2019-01-01')):
     return age
 
 def split_train_test_patients(df, seed=42):
+    """
+    Split dataset into training, validation, and test sets based on patient IDs.
+    
+    Args:
+        df (pd.DataFrame): Combined dataset with patient_id column
+        seed (int, optional): Random seed for reproducibility. Defaults to 42.
+        
+    Returns:
+        tuple: (training DataFrame, validation DataFrame, test DataFrame)
+    """
     np.random.seed(seed)
     training_patients = np.random.choice(np.arange(1, 16), size=13, replace=False)
 
@@ -90,63 +145,107 @@ def split_train_test_patients(df, seed=42):
 
     return df_train, df_val, df_test
 
+def create_features(bg_df, acc_df, food_df, gender, hba1c, add_patient_id = False):
+    """
+    Process raw data and create a time series DataFrame with features from multiple sources.
+    
+    Args:
+        bg_df (pd.DataFrame): Blood glucose data
+        acc_df (pd.DataFrame): Accelerometer data
+        food_df (pd.DataFrame): Food log data
+        gender (str): Patient gender
+        hba1c (float): Patient HbA1c value
+        
+    Returns:
+        pd.DataFrame: Time series DataFrame with combined features
+    """
+    # Clean and convert 'Timestamp' columns to datetime format
+    bg_df['Timestamp'] = pd.to_datetime(bg_df['Timestamp (YYYY-MM-DDThh:mm:ss)'], errors='coerce')
+    acc_df['Timestamp'] = pd.to_datetime(acc_df['datetime'], errors='coerce')
+    food_df['Timestamp'] = pd.to_datetime(food_df['time_begin'], errors='coerce')
+    
+    # Sort values by date time
+    bg_df = bg_df.sort_values(by='Timestamp')
+    acc_df = acc_df.sort_values(by='Timestamp')
+
+    # Reset index and then find the row where 'Event Type' is 'DateOfBirth'
+    reset_df = bg_df.reset_index(drop=True)
+    patient_dob = reset_df[reset_df['Event Type'] == 'DateOfBirth']['Patient Info'].values[0]
+
+    patient_age = calculate_age(patient_dob)
+
+    bg_df = clean_blood_glucose_df(bg_df)
+    
+    # Initialize a new DataFrame for the time series
+    time_series_df = pd.DataFrame(index=bg_df.index)  # Use the glucose timestamps as the index
+
+    time_series_df[['Timestamp','Glucose']] = bg_df[['Timestamp','Glucose Value (mg/dL)']]
+
+    # time_series_df = get_acc_hr_values(acc_df, hr_df, time_series_df) 
+    time_series_df = get_accelerometer_values(acc_df, time_series_df)
+    time_series_df = get_food_values(food_df, time_series_df)
+
+    time_series_df['Gender'] = np.where(gender == 'FEMALE', 1, 0)
+    time_series_df['HbA1c'] = hba1c
+    time_series_df['Age'] = patient_age
+
+    if add_patient_id:
+        time_series_df['patient_id'] = 0
+    
+    return time_series_df
 
 def create_dataframes():
-    data_path = f"./data/raw/big_ideas_dataset"
+    """
+    Create individual patient dataframes by processing raw data files.
+    
+    Reads data for patients 1-16, processes it, and saves individual CSV files
+    for each patient in the processed/dataset_by_patient directory.
+    
+    Returns:
+        None
+    """
+    data_path = os.path.join(SCRIPT_DIR, "data", "raw", "big_ideas_dataset")
 
-    for i in range(1,17):
+    for i in range(1, 17):
         patient = f"{i:03d}"
 
         print("Patient"+str(i))
                 
         # Load files
-        bg_df = pd.read_csv(f"{data_path}/{patient}/Dexcom_{patient}.csv")
-        acc_df = pd.read_csv(f"{data_path}/{patient}/ACC_{patient}.csv")
-        food_df = pd.read_csv(f"{data_path}/{patient}/Food_Log_{patient}.csv")
-        demographic_data = pd.read_csv(f"{data_path}/Demographics.csv")
-
-        # Clean and convert 'Timestamp' columns to datetime format
-        bg_df['Timestamp'] = pd.to_datetime(bg_df['Timestamp (YYYY-MM-DDThh:mm:ss)'], errors='coerce')
-        acc_df['Timestamp'] = pd.to_datetime(acc_df['datetime'], errors='coerce')
-        food_df['Timestamp'] = pd.to_datetime(food_df['time_begin'], errors='coerce')
+        bg_df = pd.read_csv(os.path.join(data_path, patient, f"Dexcom_{patient}.csv"))
+        acc_df = pd.read_csv(os.path.join(data_path, patient, f"ACC_{patient}.csv"))
+        food_df = pd.read_csv(os.path.join(data_path, patient, f"Food_Log_{patient}.csv"))
+        demographic_data = pd.read_csv(os.path.join(data_path, "Demographics.csv"))
         
-        # Sort values by date time
-        bg_df = bg_df.sort_values(by='Timestamp')
-        acc_df = acc_df.sort_values(by='Timestamp')
-
-
-        # Reset index and then find the row where 'Event Type' is 'DateOfBirth'
-        reset_df = bg_df.reset_index(drop=True)
-        patient_dob = reset_df[reset_df['Event Type'] == 'DateOfBirth']['Patient Info'].values[0]
-
-        patient_age = calculate_age(patient_dob)
-
-        bg_df = clean_blood_glucose_df(bg_df)
-        
-        # Initialize a new DataFrame for the time series
-        time_series_df = pd.DataFrame(index=bg_df.index)  # Use the glucose timestamps as the index
-
-        time_series_df[['Timestamp','Glucose']] = bg_df[['Timestamp','Glucose Value (mg/dL)']]
-
-        # time_series_df = get_acc_hr_values(acc_df, hr_df, time_series_df)
-        time_series_df = get_accelerometer_values(acc_df, time_series_df)
-        time_series_df = get_food_values(food_df,time_series_df)
-
         patient_demographics = demographic_data[demographic_data['ID'] == i]
 
         gender = patient_demographics['Gender'].values[0]  # Assuming you want the first value
-        time_series_df['Gender'] = np.where(gender == 'FEMALE', 1, 0)
-        time_series_df['HbA1c'] = patient_demographics['HbA1c'].values[0]
-        time_series_df['Age'] = patient_age
 
-        path = './data/processed/dataset_by_patient/patient_'+patient+'.csv'
-        time_series_df.to_csv(path)
+        hba1c = patient_demographics['HbA1c'].values[0]
+
+        time_series_df = create_features(bg_df, acc_df, food_df, gender, hba1c)
+
+        output_dir = os.path.join(SCRIPT_DIR, "data", "processed", "dataset_by_patient")
+        # Create directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        
+        output_path = os.path.join(output_dir, f"patient_{patient}.csv")
+        time_series_df.to_csv(output_path)
 
     return
 
-
 def combine_dataframes():
-    data_path = f"./data/processed/dataset_by_patient/patient_"
+    """
+    Combine individual patient dataframes into a single dataset and create
+    train/validation/test splits.
+    
+    Reads the individual patient CSV files, combines them, and creates
+    split datasets based on patient IDs for train, validation, and test sets.
+    
+    Returns:
+        None
+    """
+    data_path = os.path.join(SCRIPT_DIR, "data", "processed", "dataset_by_patient")
     combined_df = pd.DataFrame()
 
     for i in range(1, 17):
@@ -154,7 +253,7 @@ def combine_dataframes():
 
         print(f"Patient {i}")
 
-        current_df = pd.read_csv(f"{data_path}{patient}.csv")
+        current_df = pd.read_csv(os.path.join(data_path, f"patient_{patient}.csv"))
 
         current_df["patient_id"] = i
 
@@ -164,15 +263,29 @@ def combine_dataframes():
 
     df_train, df_val, df_test = split_train_test_patients(combined_df)
 
-    path = './data/processed/'
-    combined_df.to_csv(f'{path}combined_dataset.csv')
-    df_train.to_csv(f'{path}train_dataset.csv')
-    df_val.to_csv(f'{path}validation_dataset.csv')
-    df_test.to_csv(f'{path}test_dataset.csv')
+    output_path = os.path.join(SCRIPT_DIR, "data", "processed")
+    # Create directory if it doesn't exist
+    os.makedirs(output_path, exist_ok=True)
+    
+    combined_df.to_csv(os.path.join(output_path, "combined_dataset.csv"))
+    df_train.to_csv(os.path.join(output_path, "train_dataset.csv"))
+    df_val.to_csv(os.path.join(output_path, "validation_dataset.csv"))
+    df_test.to_csv(os.path.join(output_path, "test_dataset.csv"))
 
     return
 
 def main():
+    """
+    Main function to run the dataset creation pipeline.
+    
+    Executes the full data processing workflow:
+    1. Creates individual patient dataframes
+    2. Combines them into a single dataset
+    3. Creates train/validation/test splits
+    
+    Returns:
+        None
+    """
     print("Running make_dataset script...")
     create_dataframes()
     combine_dataframes()
