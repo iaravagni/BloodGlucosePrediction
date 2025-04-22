@@ -134,7 +134,7 @@ def create_test_only_dataset(ts_preprocessor, test_dataset, train_dataset=None, 
 
     
 
-def zeroshot_eval(train_df, test_df, batch_size, context_length=CONTEXT_LENGTH, forecast_length=PREDICTION_LENGTH):
+def zeroshot_eval(train_df, test_df, batch_size, context_length=CONTEXT_LENGTH, forecast_length=PREDICTION_LENGTH, model_path=TTM_MODEL_PATH):
     """
     Performs zero-shot evaluation of time series forecasting on test data.
     
@@ -165,7 +165,7 @@ def zeroshot_eval(train_df, test_df, batch_size, context_length=CONTEXT_LENGTH, 
     
     # Load model
     zeroshot_model = get_model(
-        TTM_MODEL_PATH,
+        model_path,
         context_length=context_length,
         prediction_length=forecast_length,
         freq_prefix_tuning=False,

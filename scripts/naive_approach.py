@@ -134,7 +134,7 @@ def create_test_only_dataset(ts_preprocessor, test_dataset, train_dataset=None, 
 
     
 
-def zeroshot_eval(train_df, test_df, batch_size, context_length=CONTEXT_LENGTH, forecast_length=PREDICTION_LENGTH):
+def zeroshot_eval(train_df, test_df, batch_size, context_length=CONTEXT_LENGTH, forecast_length=PREDICTION_LENGTH, model_path=TTM_MODEL_PATH):
     """
     Performs zero-shot evaluation of time series forecasting on test data.
     
@@ -165,7 +165,7 @@ def zeroshot_eval(train_df, test_df, batch_size, context_length=CONTEXT_LENGTH, 
     
     # Load model
     zeroshot_model = get_model(
-        TTM_MODEL_PATH,
+        model_path,
         context_length=context_length,
         prediction_length=forecast_length,
         freq_prefix_tuning=False,
@@ -262,6 +262,9 @@ def simple_diagonal_averaging(predictions_df, test_data, context_length, step_co
     # Initialize prediction column with zeros/NaN
     final_df['averaged_prediction'] = 0
     
+    # Convert step_columns to list if it's not already
+    step_columns = list(step_columns)
+    
     # Process each patient separately
     for patient_id in test_data['patient_id'].unique():
         # Get indices for this patient
@@ -294,12 +297,11 @@ def simple_diagonal_averaging(predictions_df, test_data, context_length, step_co
                 if excess_steps < len(step_columns):
                     # Use the last row of predictions but only the appropriate steps
                     relevant_steps = step_columns[excess_steps:]
-                    if relevant_steps:
+                    if len(relevant_steps) > 0:  # Check if list is not empty
                         avg_prediction = predictions_df.iloc[-1][relevant_steps].mean()
                         final_df.loc[row_idx, 'averaged_prediction'] = avg_prediction
     
     return final_df
-
 
 def main():
     """

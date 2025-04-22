@@ -2,13 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
-import io
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import os
 import joblib
+from sklearn.metrics import root_mean_squared_error
 
 from make_dataset import create_features
 from naive_approach import get_column_specs, prepare_data, zeroshot_eval, simple_diagonal_averaging
@@ -269,15 +265,7 @@ if show_tabs:
                         prepared_data, 
                         CONTEXT_LENGTH,
                         step_columns
-                    )
-
-                    raw_predictions_path = os.path.join(SCRIPT_DIR, '..', 'data', 'outputs', 'sample1.csv')
-                    predictions["predictions_df"].to_csv(raw_predictions_path, index=False)
-                    
-                    # Save final results to CSV
-                    final_results_path = os.path.join(SCRIPT_DIR, '..', 'data', 'outputs', 'sample.csv')
-                    final_results.to_csv(final_results_path, index=False)
-    
+                    )    
                     
                     # Visualize predictions vs actual values
                     fig, ax = plt.subplots(figsize=(10, 6))
@@ -286,13 +274,13 @@ if show_tabs:
                     non_zero_mask = final_results['averaged_prediction'] != 0
                     filtered_results = final_results[non_zero_mask]
 
-                    # Plot predictions (only non-zero values)
+                    # Plot predictions (only non-zero values) in green
                     ax.plot(filtered_results['Timestamp'], filtered_results['averaged_prediction'], 
-                            label='Predicted', alpha=0.7)
+                            label='Predicted', alpha=0.7, color='#58A618')
 
-                    # Plot actual values (all data)
+                    # Plot actual values (all data) in blue
                     ax.plot(final_results['Timestamp'], final_results['Glucose'], 
-                            label='Actual', alpha=0.7)
+                            label='Ground truth', alpha=0.7, color='#1f77b4')
 
                     ax.set_title('Glucose Predictions vs Actual Values')
                     ax.set_xlabel('Time')
@@ -300,7 +288,23 @@ if show_tabs:
                     ax.legend()
 
                     st.pyplot(fig)
-                                        
+
+                    y_true = final_results['Glucose'][CONTEXT_LENGTH:].reset_index(drop=True)
+                    y_pred = final_results['averaged_prediction'][CONTEXT_LENGTH:].reset_index(drop=True)
+                    
+                    # Filter out zero predictions
+                    non_zero_mask = y_pred != 0
+                    y_true_filtered = y_true[non_zero_mask]
+                    y_pred_filtered = y_pred[non_zero_mask]
+                    
+                    if len(y_pred_filtered) > 0:
+                        rmse = np.sqrt(root_mean_squared_error(y_true_filtered, y_pred_filtered))
+                        st.subheader("Performance Metrics")
+                        st.metric("AVERAGE RMSE", f"{rmse:.4f}")
+                    else:
+                        st.subheader("Performance Metrics")
+                        st.metric("AVERAGE RMSE", "N/A")
+
                 except Exception as e:
                     st.error(f"Error in naive model prediction: {e}")
             else:
@@ -314,7 +318,55 @@ if show_tabs:
                 X_test, y_test = format_dataset(combined_data, CONTEXT_LENGTH, PREDICTION_LENGTH)
 
                 model_output_path = os.path.join(SCRIPT_DIR, '..', 'models', 'xgb_model.pkl')
-                joblib.dump(xgb_model, model_output_path)
+                xgb_model = joblib.load(model_output_path)
+
+                y_test_pred = xgb_model.predict(X_test)
+
+                final_results = simple_diagonal_averaging(
+                    pd.DataFrame(y_test_pred), 
+                    combined_data, 
+                    CONTEXT_LENGTH,
+                    pd.DataFrame(y_test_pred).columns
+                )
+
+                # Visualize predictions vs actual values
+                fig, ax = plt.subplots(figsize=(10, 6))
+
+                # Plot all actual values in blue
+                ax.plot(final_results['Timestamp'], final_results['Glucose'], 
+                        label='Ground truth', alpha=0.7, color='#1f77b4')
+                
+                # Replace zeros with NaN (which matplotlib will skip when plotting)
+                plot_predictions = final_results['averaged_prediction'].copy()
+                plot_predictions = plot_predictions.replace(0, float('nan'))
+                
+                # Plot predictions with NaN instead of zeros in green
+                ax.plot(final_results['Timestamp'], plot_predictions, 
+                        label='Predicted', alpha=0.7, color='#58A618')
+
+                ax.set_title('Glucose Predictions vs Actual Values')
+                ax.set_xlabel('Time')
+                ax.set_ylabel('Glucose Level')
+                ax.legend()
+
+                st.pyplot(fig)
+
+                # Calculate and display metrics for single patient
+                y_true = final_results['Glucose'][CONTEXT_LENGTH:].reset_index(drop=True)
+                y_pred = final_results['averaged_prediction'][CONTEXT_LENGTH:].reset_index(drop=True)
+                
+                # Filter out zero predictions
+                non_zero_mask = y_pred != 0
+                y_true_filtered = y_true[non_zero_mask]
+                y_pred_filtered = y_pred[non_zero_mask]
+                
+                if len(y_pred_filtered) > 0:
+                    rmse = np.sqrt(root_mean_squared_error(y_true_filtered, y_pred_filtered))
+                    st.subheader("Performance Metrics")
+                    st.metric("AVERAGE RMSE", f"{rmse:.4f}")
+                else:
+                    st.subheader("Performance Metrics")
+                    st.metric("AVERAGE RMSE", "N/A")
             
             else:
                 st.error("Data not available. Please try again.")
@@ -324,8 +376,68 @@ if show_tabs:
         
         if st.button('Make prediction', key='dl_button'):
             if combined_data is not None:
-                st.success("Deep learning model prediction complete!")
-                # Add your DL model prediction code here
+                column_specs = get_column_specs()
+                prepared_data = prepare_data(combined_data, column_specs["timestamp_column"])
+                
+                train_file = os.path.join(SCRIPT_DIR, '..', 'data', 'processed', 'train_dataset.csv')
+                train_data = pd.read_csv(train_file)
+                train_data = prepare_data(train_data, column_specs["timestamp_column"])
+                predictions = zeroshot_eval(
+                    train_df=train_data,
+                    test_df=prepared_data,
+                    batch_size=8,
+                    model_path="iaravagni/ttm-finetuned-model"
+                )
+                
+                # Get all step columns
+                step_columns = [col for col in predictions["predictions_df"].columns if col.startswith("Glucose_step_")]
+                
+                # Apply simple diagonal averaging by patient
+                final_results = simple_diagonal_averaging(
+                    predictions["predictions_df"], 
+                    prepared_data, 
+                    CONTEXT_LENGTH,
+                    step_columns
+                )    
+                
+                # Visualize predictions vs actual values
+                fig, ax = plt.subplots(figsize=(10, 6))
+
+                # Filter out zero predictions
+                non_zero_mask = final_results['averaged_prediction'] != 0
+                filtered_results = final_results[non_zero_mask]
+
+                # Plot predictions (only non-zero values) in green
+                ax.plot(filtered_results['Timestamp'], filtered_results['averaged_prediction'], 
+                        label='Predicted', alpha=0.7, color='#58A618')
+
+                # Plot actual values (all data) in blue
+                ax.plot(final_results['Timestamp'], final_results['Glucose'], 
+                        label='Ground truth', alpha=0.7, color='#1f77b4')
+
+                ax.set_title('Glucose Predictions vs Actual Values')
+                ax.set_xlabel('Time')
+                ax.set_ylabel('Glucose Level')
+                ax.legend()
+
+                st.pyplot(fig)
+
+                # Calculate and display metrics for single patient
+                y_true = final_results['Glucose'][CONTEXT_LENGTH:].reset_index(drop=True)
+                y_pred = final_results['averaged_prediction'][CONTEXT_LENGTH:].reset_index(drop=True)
+                
+                # Filter out zero predictions
+                non_zero_mask = y_pred != 0
+                y_true_filtered = y_true[non_zero_mask]
+                y_pred_filtered = y_pred[non_zero_mask]
+                
+                if len(y_pred_filtered) > 0:
+                    rmse = np.sqrt(root_mean_squared_error(y_true_filtered, y_pred_filtered))
+                    st.subheader("Performance Metrics")
+                    st.metric("AVERAGE RMSE", f"{rmse:.4f}")
+                else:
+                    st.subheader("Performance Metrics")
+                    st.metric("AVERAGE RMSE", "N/A")
             else:
                 st.error("Data not available. Please try again.")
 else:

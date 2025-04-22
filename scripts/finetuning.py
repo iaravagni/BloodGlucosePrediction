@@ -223,9 +223,9 @@ def main():
     train_data = pd.read_csv("/content/train_dataset.csv")
 
 
-    learning_rate = 0.001
-    num_epochs = 40
-    batch_size = 32
+    learning_rate = 0.002
+    num_epochs = 13
+    batch_size = 64
 
     OUT_DIR = "model"
 
