@@ -86,7 +86,7 @@ The interactive app allows users to:
 
 ## 📽️ Final Deliverables
 
-- 🔗 [10-minute video presentation](#) 
+- 🔗 [10-minute video presentation](https://youtu.be/HajUSLdpwE4)
 - 🔗 [Live Streamlit app](https://huggingface.co/spaces/iaravagni/BloodGlucosePrediction)
 
 ---
