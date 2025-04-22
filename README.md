@@ -84,25 +84,6 @@ The interactive app allows users to:
 
 ---
 
-## 🛠️ Project Structure
-
-```
-📁 project-root/
-├── data/
-│   ├── raw/
-│   ├── processed/
-├── models/
-├── app/
-│   └── streamlit_app.py
-├── notebooks/
-├── scripts/
-│   └── dataset_preparation.py
-├── requirements.txt
-└── README.md
-```
-
----
-
 ## 📽️ Final Deliverables
 
 - 🔗 [10-minute video presentation](#) *(add YouTube or Panopto link)*
